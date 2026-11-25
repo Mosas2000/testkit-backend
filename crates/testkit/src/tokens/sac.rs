@@ -2883,6 +2883,11 @@ mod tests {
 
         wallet.spend(&token.address(), &alice, &200);
         token.assert_balance(&alice, 500);
+        assert_eq!(
+            token.balance(&alice) + token.balance(&bob),
+            800,
+            "burn should remove the burned amount from the funded accounts' combined balance"
+        );
 
         wallet.allow(&token.address(), &alice, &spender, &50, &1_000);
         let allowance = TokenClient::new(env.env(), &token.address()).allowance(&alice, &spender);
