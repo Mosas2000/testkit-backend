@@ -309,7 +309,11 @@ fn tracked_holders_cover_exactly_the_funded_addresses() {
     assert_eq!(token.tracked_holders(), vec![alice.clone(), bob.clone()]);
     assert!(!token.is_tracked_holder(&stranger));
 
-    let total: i128 = token.tracked_balances().iter().map(|(_, balance)| balance).sum();
+    let total: i128 = token
+        .tracked_balances()
+        .iter()
+        .map(|(_, balance)| balance)
+        .sum();
     assert_eq!(total, token.total_tracked());
 }
 

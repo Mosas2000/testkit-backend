@@ -1098,8 +1098,11 @@ mod tests {
     }
 
     #[test]
-    fn text_without_open_expects_no_artifacts() {
-        assert!(expected_artifacts(&args(&[], &[])).is_empty());
+    fn text_without_open_expects_json_artifact() {
+        assert_eq!(
+            expected_artifacts(&args(&[], &[])),
+            vec![std::path::PathBuf::from("coverage.json")]
+        );
     }
 
     #[test]
@@ -1160,6 +1163,9 @@ mod tests {
                 "core",
                 "--package",
                 "money",
+                "--json",
+                "--output-path",
+                "coverage.json",
             ]
         );
     }
@@ -1170,7 +1176,16 @@ mod tests {
         let rendered = rendered_args(&cmd);
         assert_eq!(
             rendered,
-            vec!["llvm-cov", "test", "--workspace", "--exclude", "cli"]
+            vec![
+                "llvm-cov",
+                "test",
+                "--workspace",
+                "--exclude",
+                "cli",
+                "--json",
+                "--output-path",
+                "coverage.json",
+            ]
         );
     }
 
@@ -1188,6 +1203,9 @@ mod tests {
                 "cli",
                 "--exclude",
                 "audit",
+                "--json",
+                "--output-path",
+                "coverage.json",
             ]
         );
     }

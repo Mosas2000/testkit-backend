@@ -1226,6 +1226,333 @@ impl TestToken {
             balances,
         }
     }
+
+    /// Assert that `of`'s balance equals `expected` **base units**, naming the
+    /// assertion explicitly as a raw-balance check.
+    ///
+    /// This is a named alias for [`TestToken::assert_balance`] that makes it
+    /// unambiguous at the call site that `expected` is in base units (stroops),
+    /// not whole units. Use it when the distinction matters for readability —
+    /// for example, right next to a [`TestToken::assert_balance_whole`] call.
+    ///
+    /// # Panics
+    ///
+    /// Panics with a [`TestkitError::AssertionFailed`] showing the expected
+    /// and actual balances and the token address if they differ.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use soroban_testkit::core::TestEnv;
+    ///
+    /// let env = TestEnv::new();
+    /// let token = env.token();
+    /// let alice = env.address();
+    ///
+    /// token.mint_raw(&alice, 42);
+    /// token.assert_balance_raw(&alice, 42);
+    /// ```
+    pub fn assert_balance_raw(&self, of: &Address, expected: i128) {
+        self.assert_balance(of, expected);
+    }
+
+    /// Transfer `amount` **base units** from `from` to `to`, requiring the
+    /// caller to have set up authorization (via `mock_all_auths` or
+    /// `mock_auths`) before invoking this helper.
+    ///
+    /// This is a convenience wrapper around the [`TokenClient`] transfer call
+    /// that keeps the test body free of client boilerplate. The tracked supply
+    /// is not modified by a transfer — only the on-chain balances change.
+    ///
+    /// # Panics
+    ///
+    /// Panics with a [`TestkitError::AssertionFailed`] if the transfer traps
+    /// or is rejected. Use [`TestToken::try_transfer`] for a fallible variant.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use soroban_testkit::core::TestEnv;
+    ///
+    /// let env = TestEnv::new();
+    /// let token = env.token();
+    /// let alice = env.address();
+    /// let bob = env.address();
+    ///
+    /// token.mint_raw(&alice, 100);
+    /// env.env().mock_all_auths_allowing_non_root_auth();
+    /// token.transfer(&alice, &bob, 40);
+    /// token.assert_balance(&alice, 60);
+    /// token.assert_balance(&bob, 40);
+    /// ```
+    pub fn transfer(&self, from: &Address, to: &Address, amount: i128) {
+        if let Err(err) = self.try_transfer(from, to, amount) {
+            panic!("{err}");
+        }
+    }
+
+    /// Attempt to transfer `amount` **base units** from `from` to `to`.
+    ///
+    /// Returns `Err(TestkitError)` if the transfer traps or is rejected by
+    /// the contract (for example because authorization is missing or the
+    /// sender's balance is insufficient).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use soroban_testkit::core::TestEnv;
+    ///
+    /// let env = TestEnv::new();
+    /// let token = env.token();
+    /// let alice = env.address();
+    /// let bob = env.address();
+    ///
+    /// token.mint_raw(&alice, 100);
+    /// env.env().mock_all_auths_allowing_non_root_auth();
+    /// assert!(token.try_transfer(&alice, &bob, 50).is_ok());
+    /// ```
+    pub fn try_transfer(
+        &self,
+        from: &Address,
+        to: &Address,
+        amount: i128,
+    ) -> Result<(), TestkitError> {
+        let invoke_res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            TokenClient::new(&self.env, &self.address).try_transfer(
+                from,
+                &soroban_sdk::MuxedAddress::from(to.clone()),
+                &amount,
+            )
+        }));
+
+        match invoke_res {
+            Ok(Ok(Ok(()))) => Ok(()),
+            Ok(Err(err)) => Err(TestkitError::AssertionFailed(format!(
+                "transfer of {amount} base units from {from:?} to {to:?} failed or trapped: {err:?}"
+            ))),
+            Ok(Ok(Err(err))) => Err(TestkitError::DecodeFailed(format!(
+                "transfer response decoding failed: {err:?}"
+            ))),
+            Err(_) => Err(TestkitError::AssertionFailed(format!(
+                "transfer of {amount} base units from {from:?} to {to:?} trapped with panic"
+            ))),
+        }
+    }
+
+    /// Burn `amount` **base units** from `from`, decreasing that account's
+    /// on-chain balance.
+    ///
+    /// The caller must have set up authorization for the burn (via
+    /// `mock_all_auths` or `mock_auths`) before invoking this helper. The
+    /// tracked supply managed by this `TestToken` is **not** decremented —
+    /// it only records minted supply. If you need to track net supply after
+    /// burns, compare [`TestToken::total_tracked`] against the sum of live
+    /// balances.
+    ///
+    /// # Panics
+    ///
+    /// Panics with a [`TestkitError::AssertionFailed`] if the burn traps or
+    /// is rejected. Use [`TestToken::try_burn`] for a fallible variant.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use soroban_testkit::core::TestEnv;
+    ///
+    /// let env = TestEnv::new();
+    /// let token = env.token();
+    /// let alice = env.address();
+    ///
+    /// token.mint_raw(&alice, 100);
+    /// env.env().mock_all_auths_allowing_non_root_auth();
+    /// token.burn(&alice, 30);
+    /// token.assert_balance(&alice, 70);
+    /// ```
+    pub fn burn(&self, from: &Address, amount: i128) {
+        if let Err(err) = self.try_burn(from, amount) {
+            panic!("{err}");
+        }
+    }
+
+    /// Attempt to burn `amount` **base units** from `from`.
+    ///
+    /// Returns `Err(TestkitError)` if the burn traps or is rejected by the
+    /// contract (for example because authorization is missing or the balance
+    /// is insufficient).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use soroban_testkit::core::TestEnv;
+    ///
+    /// let env = TestEnv::new();
+    /// let token = env.token();
+    /// let alice = env.address();
+    ///
+    /// token.mint_raw(&alice, 100);
+    /// env.env().mock_all_auths_allowing_non_root_auth();
+    /// assert!(token.try_burn(&alice, 50).is_ok());
+    /// token.assert_balance(&alice, 50);
+    /// ```
+    pub fn try_burn(&self, from: &Address, amount: i128) -> Result<(), TestkitError> {
+        let invoke_res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            TokenClient::new(&self.env, &self.address).try_burn(from, &amount)
+        }));
+
+        match invoke_res {
+            Ok(Ok(Ok(()))) => Ok(()),
+            Ok(Err(err)) => Err(TestkitError::AssertionFailed(format!(
+                "burn of {amount} base units from {from:?} failed or trapped: {err:?}"
+            ))),
+            Ok(Ok(Err(err))) => Err(TestkitError::DecodeFailed(format!(
+                "burn response decoding failed: {err:?}"
+            ))),
+            Err(_) => Err(TestkitError::AssertionFailed(format!(
+                "burn of {amount} base units from {from:?} trapped with panic"
+            ))),
+        }
+    }
+
+    /// The current allowance that `spender` may draw from `from`'s balance,
+    /// in **base units**.
+    ///
+    /// Returns `0` when no allowance has been set or when the approval has
+    /// expired.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use soroban_testkit::core::TestEnv;
+    ///
+    /// let env = TestEnv::new();
+    /// let token = env.token();
+    /// let alice = env.address();
+    /// let bob = env.address();
+    ///
+    /// assert_eq!(token.allowance(&alice, &bob), 0);
+    /// ```
+    pub fn allowance(&self, from: &Address, spender: &Address) -> i128 {
+        TokenClient::new(&self.env, &self.address).allowance(from, spender)
+    }
+
+    /// Approve `spender` to draw up to `amount` **base units** from `from`'s
+    /// balance, with the approval expiring at ledger sequence `live_until_ledger`.
+    ///
+    /// The caller must have set up authorization for `from` before invoking
+    /// this helper (via `mock_all_auths` or `mock_auths`).
+    ///
+    /// # Panics
+    ///
+    /// Panics with a [`TestkitError::AssertionFailed`] if the approval traps
+    /// or is rejected. Use [`TestToken::try_approve`] for a fallible variant.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use soroban_testkit::core::TestEnv;
+    ///
+    /// let env = TestEnv::new();
+    /// let token = env.token();
+    /// let alice = env.address();
+    /// let bob = env.address();
+    ///
+    /// token.mint_raw(&alice, 200);
+    /// env.env().mock_all_auths_allowing_non_root_auth();
+    /// token.approve(&alice, &bob, 100, 1_000);
+    /// assert_eq!(token.allowance(&alice, &bob), 100);
+    /// ```
+    pub fn approve(&self, from: &Address, spender: &Address, amount: i128, live_until_ledger: u32) {
+        if let Err(err) = self.try_approve(from, spender, amount, live_until_ledger) {
+            panic!("{err}");
+        }
+    }
+
+    /// Attempt to approve `spender` to draw up to `amount` **base units** from
+    /// `from`'s balance with an expiry at `live_until_ledger`.
+    ///
+    /// Returns `Err(TestkitError)` if the approval traps or is rejected.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use soroban_testkit::core::TestEnv;
+    ///
+    /// let env = TestEnv::new();
+    /// let token = env.token();
+    /// let alice = env.address();
+    /// let bob = env.address();
+    ///
+    /// token.mint_raw(&alice, 200);
+    /// env.env().mock_all_auths_allowing_non_root_auth();
+    /// assert!(token.try_approve(&alice, &bob, 50, 1_000).is_ok());
+    /// assert_eq!(token.allowance(&alice, &bob), 50);
+    /// ```
+    pub fn try_approve(
+        &self,
+        from: &Address,
+        spender: &Address,
+        amount: i128,
+        live_until_ledger: u32,
+    ) -> Result<(), TestkitError> {
+        let invoke_res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            TokenClient::new(&self.env, &self.address).try_approve(
+                from,
+                spender,
+                &amount,
+                &live_until_ledger,
+            )
+        }));
+
+        match invoke_res {
+            Ok(Ok(Ok(()))) => Ok(()),
+            Ok(Err(err)) => Err(TestkitError::AssertionFailed(format!(
+                "approve({amount} base units from {from:?} to {spender:?}, live_until={live_until_ledger}) failed or trapped: {err:?}"
+            ))),
+            Ok(Ok(Err(err))) => Err(TestkitError::DecodeFailed(format!(
+                "approve response decoding failed: {err:?}"
+            ))),
+            Err(_) => Err(TestkitError::AssertionFailed(format!(
+                "approve({amount} base units from {from:?} to {spender:?}) trapped with panic"
+            ))),
+        }
+    }
+
+    /// Assert that `spender`'s allowance from `from` equals `expected` **base
+    /// units**.
+    ///
+    /// # Panics
+    ///
+    /// Panics with a [`TestkitError::AssertionFailed`] showing the spender,
+    /// owner, expected amount, and actual amount if they differ.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use soroban_testkit::core::TestEnv;
+    ///
+    /// let env = TestEnv::new();
+    /// let token = env.token();
+    /// let alice = env.address();
+    /// let bob = env.address();
+    ///
+    /// token.mint_raw(&alice, 200);
+    /// env.env().mock_all_auths_allowing_non_root_auth();
+    /// token.approve(&alice, &bob, 75, 1_000);
+    /// token.assert_allowance(&alice, &bob, 75);
+    /// ```
+    pub fn assert_allowance(&self, from: &Address, spender: &Address, expected: i128) {
+        let actual = self.allowance(from, spender);
+        if actual != expected {
+            let token_addr = self.address();
+            panic!(
+                "{}",
+                TestkitError::AssertionFailed(format!(
+                    "expected allowance of {spender:?} from {from:?} for token {token_addr:?} \
+                     to be {expected} base units, found {actual}"
+                ))
+            );
+        }
+    }
 }
 
 /// A helper trait for table-driven mint fixtures that converts various tuple shapes into an address reference and amount.
@@ -2009,7 +2336,10 @@ impl TokenSet {
     /// assert_eq!(tokens.labels(), vec!["USDC", "EURC"]);
     /// ```
     pub fn labels(&self) -> Vec<&str> {
-        self.tokens.iter().map(|(label, _)| label.as_str()).collect()
+        self.tokens
+            .iter()
+            .map(|(label, _)| label.as_str())
+            .collect()
     }
 
     /// The token with `label`, if the set has one.
@@ -2571,6 +2901,11 @@ mod tests {
 
         wallet.spend(&token.address(), &alice, &200);
         token.assert_balance(&alice, 500);
+        assert_eq!(
+            token.balance(&alice) + token.balance(&bob),
+            800,
+            "burn should remove the burned amount from the funded accounts' combined balance"
+        );
 
         wallet.allow(&token.address(), &alice, &spender, &50, &1_000);
         let allowance = TokenClient::new(env.env(), &token.address()).allowance(&alice, &spender);
@@ -3043,10 +3378,7 @@ mod tests {
         let message = base_to_whole_units_exact(15_000_000, 7)
             .unwrap_err()
             .to_string();
-        assert!(
-            message.contains("not a whole number of units"),
-            "{message}"
-        );
+        assert!(message.contains("not a whole number of units"), "{message}");
         assert!(
             message.contains("1 whole units and 5000000 base units left over"),
             "{message}"
@@ -3108,7 +3440,10 @@ mod tests {
         let alice = env.address();
         token.mint_raw(&alice, 15_000_000);
 
-        let message = token.try_balance_whole_exact(&alice).unwrap_err().to_string();
+        let message = token
+            .try_balance_whole_exact(&alice)
+            .unwrap_err()
+            .to_string();
 
         assert!(message.contains("1.5 TEST"), "{message}");
         assert!(message.contains("15000000 base units"), "{message}");
@@ -3197,7 +3532,9 @@ mod tests {
     fn try_token_with_metadata_rejects_bad_input() {
         let env = TestEnv::new();
         assert!(env.try_token_with_metadata("Euro Coin", "EURC").is_ok());
-        assert!(env.try_token_with_metadata("Euro Coin", "no spaces").is_err());
+        assert!(env
+            .try_token_with_metadata("Euro Coin", "no spaces")
+            .is_err());
         assert!(env.try_token_with_metadata("", "EURC").is_err());
     }
 
@@ -3450,7 +3787,10 @@ mod tests {
         assert_eq!(tokens.token("USDC").symbol(), "USDC");
         assert_eq!(tokens.token("USDC").name(), "USDC");
         assert_eq!(tokens.token("EURC").symbol(), "EURC");
-        assert_ne!(tokens.token("USDC").address(), tokens.token("EURC").address());
+        assert_ne!(
+            tokens.token("USDC").address(),
+            tokens.token("EURC").address()
+        );
     }
 
     #[test]
@@ -3487,7 +3827,10 @@ mod tests {
             .or_else(|| payload.downcast_ref::<&str>().map(|m| m.to_string()))
             .unwrap_or_default();
         assert!(message.contains("known labels"), "{message}");
-        assert!(message.contains("USDC") && message.contains("EURC"), "{message}");
+        assert!(
+            message.contains("USDC") && message.contains("EURC"),
+            "{message}"
+        );
     }
 
     #[test]
@@ -3605,6 +3948,7 @@ mod tests {
         tokens.assert_balances(&alice, [("DAI", 0)]);
     }
 
+ fix/tokens-sac-improvements
     // ── Issue #133: include token address in balance assertion failures ──
 
     #[test]
@@ -3687,11 +4031,98 @@ mod tests {
 
     #[test]
     fn test_token_ownership_and_borrowing_semantics() {
+
+    // ── Issue #137: raw-balance assertion naming explicitly ──
+
+    #[test]
+    fn assert_balance_raw_passes_on_matching_base_units() {
+        let env = TestEnv::new();
+        let token = env.token();
+        let alice = env.address();
+
+        token.mint_raw(&alice, 42);
+        token.assert_balance_raw(&alice, 42);
+    }
+
+    #[test]
+    #[should_panic(expected = "expected balance of")]
+    fn assert_balance_raw_fails_on_mismatch() {
+        let env = TestEnv::new();
+        let token = env.token();
+        let alice = env.address();
+
+        token.mint_raw(&alice, 10);
+        token.assert_balance_raw(&alice, 99);
+    }
+
+    #[test]
+    fn assert_balance_raw_and_assert_balance_are_equivalent() {
+        let env = TestEnv::new();
+        let token = env.token();
+        let alice = env.address();
+
+        token.mint_raw(&alice, 777);
+        token.assert_balance(&alice, 777);
+        token.assert_balance_raw(&alice, 777);
+    }
+
+    // ── Issue #134: tracked transfer helper ──
+
+    #[test]
+    fn transfer_moves_balance_between_accounts() {
         let env = TestEnv::new();
         let token = env.token();
         let alice = env.address();
         let bob = env.address();
 
+        token.mint_raw(&alice, 100);
+        env.env().mock_all_auths_allowing_non_root_auth();
+
+        token.transfer(&alice, &bob, 40);
+        token.assert_balance(&alice, 60);
+        token.assert_balance(&bob, 40);
+    }
+
+    #[test]
+    fn transfer_does_not_change_tracked_supply() {
+        let env = TestEnv::new();
+        let token = env.token();
+        let alice = env.address();
+        let bob = env.address();
+
+        token.mint_raw(&alice, 100);
+        let supply_before = token.total_tracked();
+
+        env.env().mock_all_auths_allowing_non_root_auth();
+        token.transfer(&alice, &bob, 50);
+
+        assert_eq!(token.total_tracked(), supply_before);
+    }
+
+    #[test]
+    fn try_transfer_returns_ok_on_success() {
+        let env = TestEnv::new();
+        let token = env.token();
+        let alice = env.address();
+        let bob = env.address();
+
+        token.mint_raw(&alice, 200);
+        env.env().mock_all_auths_allowing_non_root_auth();
+
+        assert!(token.try_transfer(&alice, &bob, 100).is_ok());
+        token.assert_balance(&alice, 100);
+        token.assert_balance(&bob, 100);
+    }
+
+    #[test]
+    fn try_transfer_returns_err_when_authorization_missing() {
+ main
+        let env = TestEnv::new();
+        let token = env.token();
+        let alice = env.address();
+        let bob = env.address();
+
+ fix/tokens-sac-improvements
         // Pass token double by reference across helpers
         fn helper_mint(t: &TestToken, to: &Address, whole: i128) {
             t.mint(to, whole);
@@ -3765,10 +4196,127 @@ mod tests {
 
     #[test]
     fn test_zero_mint_behavior_explicit() {
+
+        token.mint_raw(&alice, 100);
+
+        let result = token.try_transfer(&alice, &bob, 50);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    #[should_panic(expected = "transfer of")]
+    fn transfer_panics_when_balance_insufficient() {
         let env = TestEnv::new();
         let token = env.token();
         let alice = env.address();
         let bob = env.address();
+
+        token.mint_raw(&alice, 10);
+        env.env().mock_all_auths_allowing_non_root_auth();
+        token.transfer(&alice, &bob, 999);
+    }
+
+    // ── Issue #135: tracked burn helper ──
+
+    #[test]
+    fn burn_reduces_balance_of_account() {
+        let env = TestEnv::new();
+        let token = env.token();
+        let alice = env.address();
+
+        token.mint_raw(&alice, 100);
+        env.env().mock_all_auths_allowing_non_root_auth();
+
+        token.burn(&alice, 30);
+        token.assert_balance(&alice, 70);
+    }
+
+    #[test]
+    fn burn_does_not_decrement_tracked_supply() {
+        let env = TestEnv::new();
+        let token = env.token();
+        let alice = env.address();
+
+        token.mint_raw(&alice, 100);
+        let supply_before = token.total_tracked();
+
+        env.env().mock_all_auths_allowing_non_root_auth();
+        token.burn(&alice, 40);
+
+        assert_eq!(token.total_tracked(), supply_before);
+    }
+
+    #[test]
+    fn try_burn_returns_ok_on_success() {
+        let env = TestEnv::new();
+        let token = env.token();
+        let alice = env.address();
+
+        token.mint_raw(&alice, 100);
+        env.env().mock_all_auths_allowing_non_root_auth();
+
+        assert!(token.try_burn(&alice, 50).is_ok());
+        token.assert_balance(&alice, 50);
+    }
+
+    #[test]
+    fn try_burn_returns_err_when_authorization_missing() {
+        let env = TestEnv::new();
+        let token = env.token();
+        let alice = env.address();
+
+        token.mint_raw(&alice, 100);
+
+        let result = token.try_burn(&alice, 50);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    #[should_panic(expected = "burn of")]
+    fn burn_panics_when_balance_insufficient() {
+        let env = TestEnv::new();
+        let token = env.token();
+        let alice = env.address();
+
+        token.mint_raw(&alice, 10);
+        env.env().mock_all_auths_allowing_non_root_auth();
+        token.burn(&alice, 999);
+    }
+
+    // ── Issue #136: allowance setup and assertion helpers ──
+
+    #[test]
+    fn allowance_returns_zero_before_any_approval() {
+        let env = TestEnv::new();
+        let token = env.token();
+        let alice = env.address();
+        let bob = env.address();
+
+        assert_eq!(token.allowance(&alice, &bob), 0);
+    }
+
+    #[test]
+    fn approve_sets_allowance_for_spender() {
+        let env = TestEnv::new();
+        let token = env.token();
+        let alice = env.address();
+        let bob = env.address();
+
+        token.mint_raw(&alice, 200);
+        env.env().mock_all_auths_allowing_non_root_auth();
+
+        token.approve(&alice, &bob, 100, 1_000);
+        assert_eq!(token.allowance(&alice, &bob), 100);
+    }
+
+    #[test]
+    fn try_approve_returns_ok_on_success() {
+ main
+        let env = TestEnv::new();
+        let token = env.token();
+        let alice = env.address();
+        let bob = env.address();
+ fix/tokens-sac-improvements
         let carol = env.address();
         let dave = env.address();
 
@@ -3834,5 +4382,103 @@ mod tests {
         let token = env.token();
         let alice = env.address();
         token.mint(&alice, -10);
+
+
+        token.mint_raw(&alice, 200);
+        env.env().mock_all_auths_allowing_non_root_auth();
+
+        assert!(token.try_approve(&alice, &bob, 50, 1_000).is_ok());
+        assert_eq!(token.allowance(&alice, &bob), 50);
+    }
+
+    #[test]
+    fn try_approve_returns_err_when_authorization_missing() {
+        let env = TestEnv::new();
+        let token = env.token();
+        let alice = env.address();
+        let bob = env.address();
+
+        token.mint_raw(&alice, 200);
+
+        let result = token.try_approve(&alice, &bob, 50, 1_000);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn assert_allowance_passes_when_allowance_matches() {
+        let env = TestEnv::new();
+        let token = env.token();
+        let alice = env.address();
+        let bob = env.address();
+
+        token.mint_raw(&alice, 200);
+        env.env().mock_all_auths_allowing_non_root_auth();
+        token.approve(&alice, &bob, 75, 1_000);
+
+        token.assert_allowance(&alice, &bob, 75);
+    }
+
+    #[test]
+    #[should_panic(expected = "expected allowance of")]
+    fn assert_allowance_fails_when_allowance_differs() {
+        let env = TestEnv::new();
+        let token = env.token();
+        let alice = env.address();
+        let bob = env.address();
+
+        token.mint_raw(&alice, 200);
+        env.env().mock_all_auths_allowing_non_root_auth();
+        token.approve(&alice, &bob, 75, 1_000);
+
+        token.assert_allowance(&alice, &bob, 50);
+    }
+
+    #[test]
+    fn assert_allowance_failure_message_names_spender_owner_and_token() {
+        let env = TestEnv::new();
+        let token = env.token();
+        let alice = env.address();
+        let bob = env.address();
+        let token_addr = token.address();
+
+        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            token.assert_allowance(&alice, &bob, 999);
+        }));
+
+        let err = res.expect_err("assert_allowance should panic on mismatch");
+        let msg = if let Some(s) = err.downcast_ref::<String>() {
+            s.clone()
+        } else if let Some(s) = err.downcast_ref::<&str>() {
+            s.to_string()
+        } else {
+            panic!("unexpected panic payload type");
+        };
+
+        assert!(msg.contains(&format!("{bob:?}")), "{msg}");
+        assert!(msg.contains(&format!("{alice:?}")), "{msg}");
+        assert!(msg.contains(&format!("{token_addr:?}")), "{msg}");
+        assert!(msg.contains("999"), "{msg}");
+        assert!(msg.contains("found 0"), "{msg}");
+    }
+
+    #[test]
+    fn allowance_is_independent_per_spender() {
+        let env = TestEnv::new();
+        let token = env.token();
+        let alice = env.address();
+        let bob = env.address();
+        let carol = env.address();
+
+        token.mint_raw(&alice, 500);
+        env.env().mock_all_auths_allowing_non_root_auth();
+
+        token.approve(&alice, &bob, 100, 1_000);
+        token.approve(&alice, &carol, 200, 1_000);
+
+        token.assert_allowance(&alice, &bob, 100);
+        token.assert_allowance(&alice, &carol, 200);
+        assert_eq!(token.allowance(&alice, &bob), 100);
+        assert_eq!(token.allowance(&alice, &carol), 200);
+ main
     }
 }

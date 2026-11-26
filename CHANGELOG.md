@@ -30,6 +30,9 @@ section, so a merge can never land without a place to record the change.
 
 ### Added
 
+- `TestEnv::expire_contract_instance(&contract)` advances the ledger just past one
+  contract's instance TTL, leaving entries with more headroom live.
+
 - `MatrixReport::to_markdown` and `markdown_report` render deterministic Markdown tables for CI and documentation.
 - `auth::unauthorized_callers` generates fresh callers for property-based authorization tests.
 - Added cookbook guidance for multisig-like roles and a documented async-adapter assessment.

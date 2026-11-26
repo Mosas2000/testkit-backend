@@ -648,6 +648,66 @@ impl TestEnv {
         }
     }
 
+    /// Advance the ledger just past the expiry boundary of `contract`'s
+    /// instance entry.
+    ///
+    /// Unlike [`TestEnv::expire`], which advances past `max_entry_ttl` so every
+    /// entry of every kind is gone, this reads the live TTL of the named
+    /// contract's instance entry and advances exactly one ledger past it.
+    /// Entries with more headroom stay live, so this is the targeted primitive
+    /// to use when a test only needs the instance of one contract to archive.
+    ///
+    /// Instance storage holds one entry per contract, so no key is needed;
+    /// see [`StorageKind::Instance`]. The entry is archived rather than
+    /// deleted: the next use of the contract restores it with a fresh TTL.
+    /// The TTL is read from the environment at call time, never hardcoded.
+    ///
+    /// # Panics
+    ///
+    /// Panics with [`TestkitError::Misuse`] if `contract` is not a registered
+    /// contract (the same condition as [`TestEnv::ttl_of`]), or if the required
+    /// ledger advance would overflow (see [`TestEnv::advance_ledgers`]).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use soroban_testkit::core::TestEnv;
+    /// use soroban_testkit::ttl::{StorageKind, TtlTimeline};
+    /// use soroban_sdk::{contract, contractimpl, symbol_short, Env};
+    ///
+    /// #[contract]
+    /// struct Counter;
+    ///
+    /// #[contractimpl]
+    /// impl Counter {
+    ///     pub fn increment(env: Env) -> u32 {
+    ///         let key = symbol_short!("count");
+    ///         let next = env.storage().instance().get(&key).unwrap_or(0u32) + 1;
+    ///         env.storage().instance().set(&key, &next);
+    ///         next
+    ///     }
+    /// }
+    ///
+    /// # fn main() {
+    /// let env = TestEnv::new();
+    /// let id = env.env().register(Counter, ());
+    /// let client = CounterClient::new(env.env(), &id);
+    /// client.increment();
+    ///
+    /// let timeline: TtlTimeline =
+    ///     env.ttl_timeline(&id, StorageKind::Instance, symbol_short!("count"));
+    /// env.expire_contract_instance(&id);
+    /// assert!(timeline.expired_at(env.sequence()));
+    ///
+    /// // Instance entries are archived, not deleted: the next call restores it.
+    /// assert_eq!(client.increment(), 2);
+    /// # }
+    /// ```
+    pub fn expire_contract_instance(&self, contract: &Address) {
+        let ttl = self.ttl_of(contract, StorageKind::Instance, Val::VOID);
+        self.advance_ledgers(ttl.saturating_add(1));
+    }
+
     /// Advance the ledger to exactly **one ledger past** the expiry of the
     /// entry at `contract`/`kind`/`key`.
     ///
@@ -2860,7 +2920,6 @@ mod tests {
     }
 }
 
-
 // Regression coverage for issue #176: expiry must preserve unrelated ledger fields.
 #[cfg(test)]
 mod ledger_field_preservation_tests {
@@ -2878,7 +2937,10 @@ mod ledger_field_preservation_tests {
         assert_eq!(after.base_reserve, before.base_reserve);
         assert_eq!(after.network_id, before.network_id);
         assert_eq!(after.min_temp_entry_ttl, before.min_temp_entry_ttl);
-        assert_eq!(after.min_persistent_entry_ttl, before.min_persistent_entry_ttl);
+        assert_eq!(
+            after.min_persistent_entry_ttl,
+            before.min_persistent_entry_ttl
+        );
         assert_eq!(after.max_entry_ttl, before.max_entry_ttl);
     }
 }

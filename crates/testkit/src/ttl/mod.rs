@@ -4,7 +4,11 @@
 //! loss, and the failure mode is close to untestable by hand — this module
 //! makes it a normal assertion.
 //!
-//! Beyond the raw [`StorageKind`] and [`crate::core::TestEnv::ttl_of`]
+//! For per-contract instance expiry, [`crate::core::TestEnv::expire_contract_instance`]
+//! advances only as far as the named contract's instance entry requires,
+//! instead of clearing every entry like `expire`.
+//!
+//!//! Beyond the raw [`StorageKind`] and [`crate::core::TestEnv::ttl_of`]
 //! primitives this module ships the tools a production contract actually
 //! needs: scoped execution on either side of the expiry boundary
 //! ([`crate::core::TestEnv::assert_runs_before_expiry`] /

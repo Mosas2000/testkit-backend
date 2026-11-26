@@ -254,7 +254,7 @@ fn failure_report_contains_deterministic_metadata() {
 fn fixture_builder_constructs_configured_environment() {
     use soroban_testkit::core::{FixtureBuilder, TestEnv, TestFixture};
 
-    let env: TestEnv = FixtureBuilder::new()
+    let env: TestEnv = FixtureBuilder::<TestEnv>::new()
         .seed(77)
         .timestamp(500_000)
         .sequence_number(1234)

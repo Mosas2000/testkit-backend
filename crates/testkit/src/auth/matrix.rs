@@ -610,7 +610,16 @@ impl MatrixReport {
         for cell in &self.cells {
             let expected = cell.expected_label().replace('|', "\\\\|");
             let observed = cell.observed.to_string().replace('|', "\\\\|");
-            markdown.push_str(&format!("| {} | {:?} | {} | {} | {} | {} | {} |\n", cell.entry_point.replace('|', "\\\\|"), cell.caller, cell.role.replace('|', "\\\\|"), cell.allowed, expected, observed, cell.matches));
+            markdown.push_str(&format!(
+                "| {} | {:?} | {} | {} | {} | {} | {} |\n",
+                cell.entry_point.replace('|', "\\\\|"),
+                cell.caller,
+                cell.role.replace('|', "\\\\|"),
+                cell.allowed,
+                expected,
+                observed,
+                cell.matches
+            ));
         }
         markdown
     }

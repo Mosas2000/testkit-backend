@@ -113,6 +113,12 @@ soroban-testkit audit ./src --no-color
 # Wrap text findings to a specified character width (e.g. 80 columns).
 soroban-testkit audit ./src --width 80
 
+# Use an explicit project config instead of automatic discovery.
+soroban-testkit audit ./src --config ./config/audit.toml
+
+# Emit GitHub Actions workflow annotations on stderr (stdout stays machine-readable).
+soroban-testkit audit ./src --format json --annotations
+
 # Stable machine-readable reports for automation and GitHub code scanning.
 soroban-testkit audit ./src --format json
 soroban-testkit audit ./src --format sarif > audit.sarif
@@ -196,6 +202,19 @@ scanned source directory and that root supplies rule configuration; the
 dotted name takes precedence in the same directory. Single-file scans start
 config discovery at the file's parent, and stdin scans start at the current
 directory.
+
+Project-level rule configuration is enabled by default: all rules start
+enabled at the severity in the central registry, and a config only overrides
+what it names. `audit rules --format json` reports each rule's `id`,
+`defaultEnabled`, `defaultSeverity` and documented limitations, and
+`audit explain <rule>` prints its default. `--config PATH` bypasses discovery
+and loads exactly that file; a missing path is an actionable error.
+
+Every output format carries the stable rule identifier (`rule` in text and
+JSON, `rule_id` in JSON, `ruleId` and `properties.stableRuleId` in SARIF, and
+the annotation `title`), so baselines and dashboards can key on it across
+releases. Rule ids are stable; the prose description is not.
+
 `--baseline baseline.json` resolves the baseline file from the current
 directory, while its `file` entries are workspace-relative, so one baseline
 works from member crates too. Absolute entries are also accepted.

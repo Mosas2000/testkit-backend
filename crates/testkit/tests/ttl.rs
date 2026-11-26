@@ -35,6 +35,10 @@ impl Store {
     pub fn set_instance(env: Env, value: i128) {
         env.storage().instance().set(&symbol_short!("v"), &value);
     }
+
+    pub fn read_instance(env: Env) -> Option<i128> {
+        env.storage().instance().get(&symbol_short!("v"))
+    }
 }
 
 #[contract]
@@ -140,6 +144,76 @@ fn expire_ignores_the_kind_and_advances_past_max_entry_ttl() {
     // The `kind` argument documents intent only; the advance is the same for
     // every kind and guaranteed to clear the longest possible TTL.
     assert_eq!(env.env().ledger().sequence() - start, max_entry_ttl + 1);
+}
+
+#[test]
+fn expire_contract_instance_advances_just_past_the_instance_ttl() {
+    let env = TestEnv::new();
+    let id = env.env().register(Store, ());
+    let client = StoreClient::new(env.env(), &id);
+    client.set_instance(&5);
+
+    let timeline = env.ttl_timeline(&id, StorageKind::Instance, symbol_short!("v"));
+    let start = env.env().ledger().sequence();
+    env.expire_contract_instance(&id);
+
+    assert_eq!(
+        env.env().ledger().sequence() - start,
+        timeline.ttl_remaining + 1
+    );
+    assert!(timeline.expired_at(env.env().ledger().sequence()));
+    // Instance entries are archived rather than deleted: a later use restores.
+    assert_eq!(client.read_instance(), Some(5));
+    assert!(env.ttl_of(&id, StorageKind::Instance, symbol_short!("v")) > 0);
+}
+
+#[test]
+fn expire_contract_instance_uses_the_live_extended_ttl() {
+    let env = TestEnv::new();
+    let id = env.env().register(Store, ());
+    let client = StoreClient::new(env.env(), &id);
+    client.set_instance(&7);
+    env.env().as_contract(&id, || {
+        env.env().storage().instance().extend_ttl(1_000, 1_000);
+    });
+
+    let ttl = env.ttl_of(&id, StorageKind::Instance, symbol_short!("v"));
+    assert!(ttl >= 1_000);
+    let start = env.env().ledger().sequence();
+    env.expire_contract_instance(&id);
+    assert_eq!(env.env().ledger().sequence() - start, ttl + 1);
+}
+
+#[test]
+fn expire_contract_instance_leaves_entries_with_more_headroom_live() {
+    let env = TestEnv::new();
+    let id = env.env().register(Store, ());
+    let client = StoreClient::new(env.env(), &id);
+    client.set_instance(&1);
+    client.set_persistent(&symbol_short!("p"), &2);
+    env.env().as_contract(&id, || {
+        env.env()
+            .storage()
+            .persistent()
+            .extend_ttl(&symbol_short!("p"), 10_000, 10_000);
+    });
+
+    let instance_ttl = env.ttl_of(&id, StorageKind::Instance, symbol_short!("v"));
+    let persistent_before = env.ttl_of(&id, StorageKind::Persistent, symbol_short!("p"));
+    env.expire_contract_instance(&id);
+    let persistent_after = env.ttl_of(&id, StorageKind::Persistent, symbol_short!("p"));
+
+    assert!(instance_ttl < persistent_before);
+    assert_eq!(persistent_before - persistent_after, instance_ttl + 1);
+    assert!(persistent_after > 0, "sibling entry should still be live");
+}
+
+#[test]
+#[should_panic(expected = "unsupported storage inspection")]
+fn expire_contract_instance_rejects_an_unregistered_address() {
+    let env = TestEnv::new();
+    let unregistered: Address = env.address();
+    env.expire_contract_instance(&unregistered);
 }
 
 #[test]
